@@ -1,0 +1,145 @@
+import discord
+from discord.ext import commands
+import asyncio
+import random
+import aiosqlite
+import os
+
+TOKEN = os.getenv("TOKEN")
+
+intents = discord.Intents.default()
+intents.message_content = True
+intents.members = True
+
+bot = commands.Bot(command_prefix="!", intents=intents)
+
+CASAS = {
+    "Gryffindor": "🦁",
+    "Slytherin": "🐍",
+    "Ravenclaw": "🦅",
+    "Hufflepuff": "🦡"
+}
+
+PREGUNTAS = [
+    {
+        "pregunta": "¿Qué valor aprecias más?",
+        "opciones": {
+            "A": ("Valentía", "Gryffindor"),
+            "B": ("Ambición", "Slytherin"),
+            "C": ("Inteligencia", "Ravenclaw"),
+            "D": ("Lealtad", "Hufflepuff")
+        }
+    },
+    {
+        "pregunta": "¿Qué harías ante una injusticia?",
+        "opciones": {
+            "A": ("Luchar inmediatamente", "Gryffindor"),
+            "B": ("Usarla a tu favor", "Slytherin"),
+            "C": ("Analizar la situación", "Ravenclaw"),
+            "D": ("Proteger a los afectados", "Hufflepuff")
+        }
+    },
+    {
+        "pregunta": "¿Qué clase te atrae más?",
+        "opciones": {
+            "A": ("Defensa Contra las Artes Oscuras", "Gryffindor"),
+            "B": ("Pociones", "Slytherin"),
+            "C": ("Encantamientos", "Ravenclaw"),
+            "D": ("Cuidado de Criaturas Mágicas", "Hufflepuff")
+        }
+    }
+]
+
+FRASES = [
+    "🎩 Hmm... interesante...",
+    "🎩 Difícil decisión...",
+    "🎩 Veo mucho potencial...",
+    "🎩 ¡Ah, ya lo sé!"
+]
+
+@bot.event
+async def on_ready():
+    async with aiosqlite.connect("casas.db") as db:
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS usuarios (
+                user_id INTEGER PRIMARY KEY,
+                casa TEXT
+            )
+        """)
+        await db.commit()
+    print(f"✅ Bot conectado como {bot.user}")
+
+@bot.command()
+async def sombrero(ctx):
+    async with aiosqlite.connect("casas.db") as db:
+        cursor = await db.execute(
+            "SELECT casa FROM usuarios WHERE user_id = ?",
+            (ctx.author.id,)
+        )
+        row = await cursor.fetchone()
+
+        if row:
+            await ctx.send(
+                f"🎩 {ctx.author.mention}, ya perteneces a **{row[0]}**.\n"
+                "El Sombrero no se equivoca dos veces."
+            )
+            return
+
+    puntos = {casa: 0 for casa in CASAS}
+
+    intro = discord.Embed(
+        title="🎩 El Sombrero Seleccionador",
+        description="Responde con **A, B, C o D**",
+        color=0x6A0DAD
+    )
+    await ctx.send(embed=intro)
+
+    def check(m):
+        return m.author == ctx.author and m.channel == ctx.channel and m.content.upper() in ["A","B","C","D"]
+
+    for p in PREGUNTAS:
+        embed = discord.Embed(
+            title="📜 Pregunta",
+            description=p["pregunta"],
+            color=0xFFD700
+        )
+
+        for letra, (texto, _) in p["opciones"].items():
+            embed.add_field(name=letra, value=texto, inline=False)
+
+        await ctx.send(embed=embed)
+
+        try:
+            msg = await bot.wait_for("message", check=check, timeout=30)
+            casa = p["opciones"][msg.content.upper()][1]
+            puntos[casa] += 1
+        except asyncio.TimeoutError:
+            casa = random.choice(list(CASAS.keys()))
+            puntos[casa] += 1
+
+    for frase in FRASES:
+        await ctx.send(frase)
+        await asyncio.sleep(1.5)
+
+    casa_final = max(puntos, key=puntos.get)
+    emoji = CASAS[casa_final]
+
+    async with aiosqlite.connect("casas.db") as db:
+        await db.execute(
+            "INSERT INTO usuarios (user_id, casa) VALUES (?, ?)",
+            (ctx.author.id, casa_final)
+        )
+        await db.commit()
+
+    rol = discord.utils.get(ctx.guild.roles, name=casa_final)
+    if rol:
+        await ctx.author.add_roles(rol)
+
+    resultado = discord.Embed(
+        title="✨ DECISIÓN FINAL ✨",
+        description=f"{emoji} **¡{ctx.author.mention}, perteneces a {casa_final}!**",
+        color=0x00FF00
+    )
+    await ctx.send(embed=resultado)
+
+bot.run(TOKEN)
